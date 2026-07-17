@@ -352,7 +352,7 @@ def configure(self):
 
     self.env.INCLUDES_MED = ['$FAKE_USR/include']
     self.env.LIBPATH_MED = ['$FAKE_USR/lib']
-    self.env.LIB_MED = ['medfC', 'medC']
+    self.env.LIB_MED = ['med', 'medC']
 
     self.env.INCLUDES_TCL = ['$FAKE_USR/include', '$TMX_PREFIX/include']
     self.env.LIBPATH_TCL = ['$FAKE_USR/lib', '$TMX_PREFIX/lib']
@@ -408,7 +408,7 @@ echo "=== Configurando Code_Aster paralelo ==="
   --parmetis-libs="parmetis" \
   --scotch-libs="ptesmumps ptscotch ptscotcherr scotch scotcherr esmumps" \
   --hdf5-libs="hdf5_hl_fortran hdf5_fortran hdf5_hl hdf5" \
-  --med-libs="medfC medC"
+  --med-libs="med medC"
 
 echo "=== Compilando Code_Aster ==="
 ./waf build -j"$(nproc)"
