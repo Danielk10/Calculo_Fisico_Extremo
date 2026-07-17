@@ -14,7 +14,9 @@ export FC=gfortran
 
 export COMMON_CFLAGS="-fPIC -fPIE -Oz -ffile-prefix-map=$DESTDIR= -I$FAKE_USR/include -I$TMX_PREFIX/include"
 export COMMON_CXXFLAGS="-fPIC -fPIE -Oz -ffile-prefix-map=$DESTDIR= -I$FAKE_USR/include -I$TMX_PREFIX/include"
-export LDFLAGS="-pie -Wl,-z,max-page-size=16384 -L$FAKE_USR/lib -L$TMX_PREFIX/lib"
+export BASE_LDFLAGS="-Wl,-z,max-page-size=16384 -L$FAKE_USR/lib -L$TMX_PREFIX/lib"
+export EXE_LDFLAGS="-pie $BASE_LDFLAGS"
+export SHARED_LDFLAGS="$BASE_LDFLAGS"
 
 echo "Clonando MEDfile v6.0.1..."
 rm -rf "$HOME/med-6.0.1"
@@ -42,8 +44,8 @@ cmake "$HOME/med-6.0.1" \
   -DCMAKE_Fortran_COMPILER="$FC" \
   -DCMAKE_C_FLAGS="$COMMON_CFLAGS" \
   -DCMAKE_CXX_FLAGS="$COMMON_CXXFLAGS" \
-  -DCMAKE_SHARED_LINKER_FLAGS="$LDFLAGS" \
-  -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
+  -DCMAKE_SHARED_LINKER_FLAGS="$SHARED_LDFLAGS" \
+  -DCMAKE_EXE_LINKER_FLAGS="$EXE_LDFLAGS" \
   -DHDF5_ROOT_DIR="$FAKE_USR" \
   -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=ON \
   -DMEDFILE_BUILD_TESTS=OFF \
@@ -61,3 +63,4 @@ DESTDIR="$DESTDIR" cmake --install .
 echo "=== Verificando instalación de MEDfile ==="
 test -f "$FAKE_USR/lib/libmedC.so" && echo "libmedC.so OK" || echo "FALTA libmedC.so"
 test -f "$FAKE_USR/include/med.h" && echo "med.h OK" || echo "FALTA med.h"
+test -f "$FAKE_USR/lib/libmedfC.so" && echo "libmedfC.so OK" || echo "FALTA libmedfC.so"
