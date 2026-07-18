@@ -8,20 +8,26 @@ export DESTDIR="$HOME/fake_root"
 export FAKE_USR="$DESTDIR$APP_PREFIX"
 export TMX_PREFIX="/data/data/com.termux/files/usr"
 
-mkdir -p "$FAKE_USR/include" "$FAKE_USR/lib" "$FAKE_USR/bin"
+mkdir -p "$FAKE_USR/include" "$FAKE_USR/include_seq" "$FAKE_USR/lib" "$FAKE_USR/bin"
 
 export PATH="$FAKE_USR/bin:$TMX_PREFIX/bin:$PATH"
 export LD_LIBRARY_PATH="$FAKE_USR/lib:$TMX_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
-export CC=clang
-export FC=flang
-export FL=flang
+# --- Compiladores nativos (sin MPI) ---
+export CC="$TMX_PREFIX/bin/clang"
+export FC="$TMX_PREFIX/bin/gfortran"
+export FL="$TMX_PREFIX/bin/gfortran"
+
+if [ ! -x "$CC" ] || [ ! -x "$FC" ]; then
+  echo "ERROR: clang/gfortran no encontrados en $TMX_PREFIX/bin"
+  exit 1
+fi
 
 export AR="llvm-ar"
 export ARFLAGS="vr"
 export RANLIB="llvm-ranlib"
 
-echo "=== Verificando que METIS previo este en 64 bits ==="
+echo "=== Verificando que METIS/Scotch previos esten en 64 bits ==="
 
 if [ ! -f "$FAKE_USR/include/metis.h" ]; then
   echo "ERROR: no se encontro $FAKE_USR/include/metis.h. Compila METIS antes de MUMPS."
@@ -44,33 +50,37 @@ echo "OK: METIS confirmado en 64 bits, MUMPS puede compilarse en modo INTSIZE64"
 export CPPFLAGS="-I$FAKE_USR/include -I$TMX_PREFIX/include"
 export OPTC="-fPIC -O2 -ffile-prefix-map=$DESTDIR= -DINTSIZE64 -Wno-error=implicit-function-declaration -Wno-format -Wno-absolute-value $CPPFLAGS"
 
-# MUMPS usa macros #ifdef INTSIZE64 dentro de los .F para promover a
-# INTEGER(8) SOLO donde corresponde.
-export OPTF="-fPIC -O2 -ffile-prefix-map=$DESTDIR= -cpp -DINTSIZE64 -fallow-argument-mismatch $CPPFLAGS"
+# ---------- tolerar el mismatch INTEGER(4)/INTEGER(8) de gfortran 14 en libseq ----------
+export OPTF="-fPIC -O2 -ffile-prefix-map=$DESTDIR= -cpp -DINTSIZE64 -fallow-argument-mismatch -w $CPPFLAGS"
 
-export SHARED_LDFLAGS="-fuse-ld=lld -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 -shared -L$FAKE_USR/lib -L$TMX_PREFIX/lib -landroid-shmem -landroid-posix-semaphore -lpthread"
+export SHARED_LDFLAGS="-fuse-ld=lld -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 -shared -L$FAKE_USR/lib -L$TMX_PREFIX/lib -lpthread"
 
 SRC="$HOME/mumps-aster"
 
-echo "=== Descargando MUMPS 5.1.1 (rama for_aster) ==="
+echo "=== Descargando MUMPS (rama for_aster) ==="
 rm -rf "$SRC"
-# Verificación de mercurial
-if ! command -v hg &> /dev/null; then
-    echo "ERROR: mercurial (hg) no está instalado y es necesario para el comando hg clone."
-    echo "Por favor, instale hg o proporcione una alternativa de descarga."
-    exit 1
-fi
 hg clone -b for_aster http://hg.code.sf.net/p/prereq/mumps "$SRC"
 
 cd "$SRC" || exit 1
 
-echo "=== Configurando Makefile.inc (modo SECUENCIAL con libseq) ==="
+echo "=== Detectando version real del repositorio clonado ==="
+MUMPS_VERSION_RAW="$(tr -d '\r' < "$SRC/VERSION" 2>/dev/null | head -n 1 || true)"
+if [ -z "$MUMPS_VERSION_RAW" ]; then
+  echo "ERROR: no se pudo leer $SRC/VERSION"
+  exit 1
+fi
+MUMPS_VERSION_CLEAN="$(printf '%s\n' "$MUMPS_VERSION_RAW" | sed -E 's/^MUMPS[[:space:]]+//; s/[[:space:]]+$//')"
+echo "VERSION detectada en repo: $MUMPS_VERSION_RAW"
+echo "VERSION limpia para waf: $MUMPS_VERSION_CLEAN"
+
+echo "=== Configurando Makefile.inc (modo SECUENCIAL) ==="
 rm -f Makefile.inc
 
+# ---------- mantener \$(topdir) y \$(LPORDDIR) literales para make ----------
 {
-  echo "LPORDDIR    = $SRC/PORD/lib"
-  echo "IPORD       = -I$SRC/PORD/include"
-  echo "LPORD       = -L$(LPORDDIR) -lpord"
+  echo 'LPORDDIR    = $(topdir)/PORD'
+  echo 'IPORD       = -I$(LPORDDIR)/include'
+  echo 'LPORD       = -L$(LPORDDIR)/lib -lpord'
   echo "IMETIS      = -I$FAKE_USR/include"
   echo "LMETIS      = -L$FAKE_USR/lib -lmetis"
   echo "ISCOTCH     = -I$FAKE_USR/include"
@@ -85,36 +95,32 @@ rm -f Makefile.inc
   echo "OPTL        = -O2"
   echo "INCPAR      ="
   echo "LIBPAR      ="
-  echo "INCSEQ      = -I$(topdir)/libseq"
-  echo "LIBSEQ      = $(LAPACK) -L$(topdir)/libseq -lmpiseq"
+  echo 'INCSEQ      = -I$(topdir)/libseq'
+  echo 'LIBSEQ      = -L$(topdir)/libseq -lmpiseq'
+  echo "LIBSEQNEEDED = libseqneeded"
   echo "LIBBLAS     = -L$FAKE_USR/lib -lopenblas"
+  echo "LIBOTHERS   = -lpthread"
   echo "AR          = $AR $ARFLAGS "
   echo "RANLIB      = $RANLIB"
   echo "OUTC        = -o "
   echo "OUTF        = -o "
   echo "RM          = rm -f"
   echo "LIBEXT      = .a"
-  echo "INCS        = $(INCSEQ)"
-  echo "LIBS        = $(LIBSEQ)"
-  echo "LIBSEQNEEDED = libseqneeded"
 } >> Makefile.inc
 
 echo "--- Contenido de Makefile.inc generado ---"
 cat Makefile.inc
 
-echo "=== Limpieza preventiva (por si quedan .mod/.o de intentos previos) ==="
+echo "=== Limpieza preventiva (por si quedan .mod/.o/.a de intentos previos) ==="
 make clean 2>/dev/null || true
 find "$SRC" -name "*.mod" -delete 2>/dev/null || true
 find "$SRC" -name "*.o" -delete 2>/dev/null || true
+find "$SRC" -name "*.a" -delete 2>/dev/null || true
 
-echo "=== Compilando libseq (MPI ficticio para modo secuencial) ==="
-cd libseq
-make CC="$CC" FC="$FC" OPTC="$OPTC" OPTF="$OPTF" AR="$AR $ARFLAGS" RANLIB="$RANLIB" OUTC="-o " OUTF="-o "
-cd ..
-
-echo "=== Compilando PORD manualmente ==="
+echo "=== Compilando PORD manualmente (CORREGIDO) ==="
 cd PORD/lib
-for file in graph.c gbipart.c gbisect.c ddcreate.c ddbisect.c nestdiss.c multisector.c gelim.c bucket.c tree.c symbfac.c interface.c sort.c minpriority.c; do
+# Se cambia la lista estática por *.c para incorporar pordf_wnd.c dinámicamente
+for file in *.c; do
     echo "Compilando $file..."
     $CC -I../include $OPTC -c "$file" -o "${file%.c}.o"
 done
@@ -135,6 +141,12 @@ make z -j"$NCPU"
 make s -j"$NCPU"
 make c -j"$NCPU"
 
+echo "=== Verificando que libseq haya generado libmpiseq.a ==="
+if [ ! -f "$SRC/libseq/libmpiseq.a" ]; then
+  echo "ERROR: no se genero $SRC/libseq/libmpiseq.a"
+  exit 1
+fi
+
 echo "=== Transformando archivos estaticos .a en .so ==="
 cd lib
 
@@ -153,17 +165,50 @@ convert_to_so() {
 }
 
 convert_to_so libpord ""
-convert_to_so libmumps_common "-L. -lpord -L../libseq -lmpiseq -L$FAKE_USR/lib -lesmumps -lscotch -lscotcherr -lmetis -lopenblas"
+convert_to_so libmumps_common "-L. -lpord -L$FAKE_USR/lib -lesmumps -lscotch -lscotcherr -lmetis -lopenblas -L../libseq -lmpiseq"
 convert_to_so libsmumps "-L. -lmumps_common"
 convert_to_so libdmumps "-L. -lmumps_common"
 convert_to_so libcmumps "-L. -lmumps_common"
 convert_to_so libzmumps "-L. -lmumps_common"
 
-echo "=== Instalando MUMPS en fake_root ==="
+echo "=== Instalando MUMPS en fake_root (preservando include/ y include_seq/ SEPARADOS) ==="
 cd ../
-cp -r include/*.h "$FAKE_USR/include/"
-cp -r lib/*.so "$FAKE_USR/lib/"
-cp -r libseq/libmpiseq.a "$FAKE_USR/lib/" 2>/dev/null || true
+
+# include/ -> headers principales MUMPS
+cp -f include/*.h "$FAKE_USR/include/"
+
+# libseq/ -> headers secuenciales, separados para waf de Code_Aster
+cp -f libseq/*.h "$FAKE_USR/include_seq/" 2>/dev/null || true
+
+# bibliotecas compartidas generadas
+cp -f lib/*.so "$FAKE_USR/lib/"
+
+# biblioteca estatica secuencial que waf y/o el link final pueden necesitar
+cp -f libseq/libmpiseq.a "$FAKE_USR/lib/"
+
+# metadata de version: generar siempre desde VERSION real del repo
+printf '%s\n' "$MUMPS_VERSION_CLEAN" > "$FAKE_USR/include/MUMPS_VERSION_INFO"
+echo "MUMPS_VERSION_INFO generado: $(cat "$FAKE_USR/include/MUMPS_VERSION_INFO")"
+
+echo "=== Verificacion de copia a fake_root ==="
+for f in \
+  "$FAKE_USR/include/dmumps_c.h" \
+  "$FAKE_USR/include/mumps_c_types.h" \
+  "$FAKE_USR/include_seq/mpif.h" \
+  "$FAKE_USR/lib/libdmumps.so" \
+  "$FAKE_USR/lib/libzmumps.so" \
+  "$FAKE_USR/lib/libsmumps.so" \
+  "$FAKE_USR/lib/libcmumps.so" \
+  "$FAKE_USR/lib/libmumps_common.so" \
+  "$FAKE_USR/lib/libpord.so" \
+  "$FAKE_USR/lib/libmpiseq.a" \
+  "$FAKE_USR/include/MUMPS_VERSION_INFO"; do
+  if [ ! -e "$f" ]; then
+    echo "ERROR: falta artefacto instalado: $f"
+    exit 1
+  fi
+done
+echo "OK: copia de headers, include_seq, .so, libmpiseq.a y MUMPS_VERSION_INFO verificada"
 
 echo "=== Verificando Dependencias ==="
 if [ -f "$FAKE_USR/lib/libdmumps.so" ]; then
@@ -202,4 +247,8 @@ fi
 
 rm -f "$HOME/check_mumps_int" "$HOME/check_mumps_int.c"
 
-echo "=== RESULTADO: MUMPS 5.1.1 (for_aster) compilado y VERIFICADO en enteros largos (64-bit, modo SECUENCIAL) ==="
+echo "=== RESULTADO: MUMPS (for_aster) SECUENCIAL compilado y VERIFICADO ==="
+echo "Version instalada: $MUMPS_VERSION_CLEAN"
+echo "Headers MUMPS en: $FAKE_USR/include"
+echo "Headers secuenciales en: $FAKE_USR/include_seq"
+echo "Bibliotecas en: $FAKE_USR/lib"
